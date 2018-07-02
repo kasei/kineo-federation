@@ -106,18 +106,18 @@ open class FederatingQueryEvaluator: SimpleQueryEvaluatorProtocol {
         var query = try rewriter.simplify(query: original)
             .rewrite(addServiceCalls)
         
-        for _ in 1...4 {
+        for _ in 1...4 { // TODO: fix this whenever query rewriting can handle bottom-up rewriting rules
             query = try query.rewrite(pushdownJoins)
         }
 
-        for _ in 1...4 {
+        for _ in 1...4 { // TODO: fix this whenever query rewriting can handle bottom-up rewriting rules
             query = try rewriter.simplify(query: query)
         }
         
         query = try query.rewrite(mergeServiceJoins)
         query = try query.rewrite(reorderServiceJoins)
 
-        for _ in 1...4 {
+        for _ in 1...4 { // TODO: fix this whenever query rewriting can handle bottom-up rewriting rules
             query = try rewriter.simplify(query: query)
         }
 
