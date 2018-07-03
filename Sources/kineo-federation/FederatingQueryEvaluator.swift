@@ -79,7 +79,7 @@ open class FederatingQueryEvaluator: SimpleQueryEvaluatorProtocol {
     }
     
     public func evaluateGraphTerms(in: Term) -> AnyIterator<Term> {
-        fatalError("TODO: implement evaluateGraphTerms(in:)")
+        fatalError("evaluateGraphTerms(in:) should never be called after query rewriting")
     }
     
     public func triples(describing term: Term) throws -> AnyIterator<Triple> {
@@ -87,22 +87,16 @@ open class FederatingQueryEvaluator: SimpleQueryEvaluatorProtocol {
     }
 
     public func evaluate(quad: QuadPattern) throws -> AnyIterator<TermResult> {
-        fatalError("TODO: implement evaluate(quad:)")
+        fatalError("evaluate(quad:) should never be called after query rewriting")
     }
 
     public func evaluate(algebra: Algebra, inGraph: Node) throws -> AnyIterator<TermResult> {
         fatalError("TODO: implement evaluate(algebra:inGraph:)")
     }
 
-    public func evaluate(bgp patterns: [TriplePattern], activeGraph: Term) throws -> AnyIterator<TermResult> {
-        fatalError("TODO: implement evaluate(bgp:activeGraph:)")
-    }
-    
     public func evaluate(query original: Query) throws -> QueryResult<[TermResult], [Triple]> {
         let rewriter = SPARQLQueryRewriter()
         let addServiceCalls = constructServiceCallInsertionRewriter()
-        print("query0: \(original.serialize())")
-        print("=======================================================")
         var query = try rewriter.simplify(query: original)
             .rewrite(addServiceCalls)
         
@@ -120,8 +114,6 @@ open class FederatingQueryEvaluator: SimpleQueryEvaluatorProtocol {
         for _ in 1...4 { // TODO: fix this whenever query rewriting can handle bottom-up rewriting rules
             query = try rewriter.simplify(query: query)
         }
-
-        print("query1: \(query.serialize())")
         return try evaluate(query: query, activeGraph: nil)
     }
 
