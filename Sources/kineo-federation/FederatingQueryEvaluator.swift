@@ -100,20 +100,17 @@ open class FederatingQueryEvaluator: SimpleQueryEvaluatorProtocol {
         var query = try rewriter.simplify(query: original)
             .rewrite(addServiceCalls)
         
-        for _ in 1...4 { // TODO: fix this whenever query rewriting can handle bottom-up rewriting rules
-            query = try query.rewrite(pushdownJoins)
-        }
-
-        for _ in 1...4 { // TODO: fix this whenever query rewriting can handle bottom-up rewriting rules
-            query = try rewriter.simplify(query: query)
-        }
+        query = try query.rewrite(pushdownJoins)
+        query = try rewriter.simplify(query: query)
         
-        query = try query.rewrite(mergeServiceJoins)
-        query = try query.rewrite(reorderServiceJoins)
+        query = try query
+            .rewrite(mergeServiceJoins)
+            .rewrite(reorderServiceJoins)
+        
+        query = try rewriter.simplify(query: query)
 
-        for _ in 1...4 { // TODO: fix this whenever query rewriting can handle bottom-up rewriting rules
-            query = try rewriter.simplify(query: query)
-        }
+//        print("============================================================")
+//        print(query.serialize())
         return try evaluate(query: query, activeGraph: nil)
     }
 
@@ -121,6 +118,8 @@ open class FederatingQueryEvaluator: SimpleQueryEvaluatorProtocol {
         let e = self.endpoints
         return { (a: Algebra) throws -> RewriteStatus<Algebra> in
             switch a {
+            case .service(_):
+                return .keep
             case .bgp(let tps):
                 let a : Algebra = tps.reduce(.joinIdentity) { .innerJoin($0, .triple($1)) }
                 return .rewriteChildren(a)
