@@ -9,6 +9,7 @@
 import Foundation
 import SPARQLSyntax
 import Kineo
+import KineoFederation
 
 /**
  Evaluate the supplied Query against the database's QuadStore and print the results.
