@@ -20,7 +20,7 @@ class NullAvailabilityOracle : AvailabilityOracle {
     }
 }
 
-public class CachingAvailabilityOracle : AvailabilityOracle {
+public class CachingAskAvailabilityOracle : AvailabilityOracle {
     var existsCache: [URL:[Algebra:Bool]]
     init() {
         existsCache = [:]
@@ -40,26 +40,50 @@ public class CachingAvailabilityOracle : AvailabilityOracle {
             default:
                 break
             }
-            print("Is \(algebra) possible available from \(endpoint)?")
-            existsCache[endpoint, default: [:]][algebra] = true
+            print("Is \(algebra) possibly available from \(endpoint)?")
+            existsCache[endpoint, default: [:]][algebra] = true // TODO
+            return true
+        }
+    }
+
+    private func predicate(_ pred: Term, existsInEndpoint endpoint: URL) -> Bool {
+        print("Is predicate \(pred) available in \(endpoint)?")
+        let sparql = "ASK { [] \(pred) [] }"
+        let client = SPARQLClient(endpoint: endpoint)
+        do {
+            let result = try client.execute(sparql)
+            switch result {
+            case .boolean(let b):
+                print("-> \(b ? "yes" : "no")")
+                return b
+            default:
+                return true
+            }
+        } catch {
+            print("*** \(error)")
             return true
         }
     }
 }
 
 open class FederatingQueryRewriter {
+    var oracle: AvailabilityOracle
+    
+    init(oracle: AvailabilityOracle? = nil) {
+        self.oracle = oracle ?? CachingAskAvailabilityOracle()
+    }
     public func federatedEquavalent(for query: Query, endpoints: [URL]) throws -> Query {
         let rewriter = SPARQLQueryRewriter()
-        let cachingOracle = CachingAvailabilityOracle()
+        let cachingOracle = self.oracle
         let addServiceCalls = constructServiceCallInsertionRewriter(endpoints: endpoints, algebraOracle: cachingOracle)
         var query = try rewriter.simplify(query: query)
             .rewrite(addServiceCalls)
-        query = try query.rewrite(pushdownJoins)
+        query = try query.rewrite(FederatingQueryRewriter.pushdownJoins)
         query = try rewriter.simplify(query: query)
         
         query = try query
-            .rewrite(mergeServiceJoins)
-            .rewrite(reorderServiceJoins)
+            .rewrite(FederatingQueryRewriter.mergeServiceJoins)
+            .rewrite(FederatingQueryRewriter.reorderServiceJoins)
         query = try rewriter.simplify(query: query)
         return query
     }
@@ -85,6 +109,51 @@ open class FederatingQueryRewriter {
             default:
                 return .rewriteChildren(a)
             }
+        }
+    }
+
+    private static func reorderServiceJoins(_ algebra: Algebra) throws -> RewriteStatus<Algebra> {
+        switch algebra {
+        case .union(_, _):
+            let branches = algebra.unionBranches!.sorted { $0.serviceCount <= $1.serviceCount }
+            let f = branches.first!
+            let u = branches.dropFirst().reduce(f) { .union($0, $1) }
+            return .rewrite(u)
+        default:
+            return .rewriteChildren(algebra)
+        }
+    }
+
+    private static func mergeServiceJoins(_ algebra: Algebra) throws -> RewriteStatus<Algebra> {
+        switch algebra {
+        case let .innerJoin(.service(a, lhs, ls), .service(b, rhs, rs)) where a == b:
+            return .rewrite(.service(a, .innerJoin(lhs, rhs), ls || rs))
+        default:
+            return .rewriteChildren(algebra)
+        }
+    }
+
+    private static func pushdownJoins(_ algebra: Algebra) throws -> RewriteStatus<Algebra> {
+        switch algebra {
+        case let .innerJoin(.union(a, b), .union(c, d)):
+            return .rewriteChildren(
+                .union(
+                    .union(
+                        .innerJoin(a, c),
+                        .innerJoin(a, d)
+                    ),
+                    .union(
+                        .innerJoin(b, c),
+                        .innerJoin(b, d)
+                    )
+                )
+            )
+        case let .innerJoin(.union(a, b), c):
+            return .rewriteChildren(.union(.innerJoin(a, c), .innerJoin(b, c)))
+        case let .innerJoin(a, .union(b, c)):
+            return .rewriteChildren(.union(.innerJoin(a, b), .innerJoin(a, c)))
+        default:
+            return .rewriteChildren(algebra)
         }
     }
 }
@@ -181,52 +250,6 @@ open class FederatingQueryEvaluator: SimpleQueryEvaluatorProtocol {
     }
 }
 
-private func reorderServiceJoins(_ algebra: Algebra) throws -> RewriteStatus<Algebra> {
-    switch algebra {
-    case .union(_, _):
-        let branches = algebra.unionBranches!.sorted { $0.serviceCount <= $1.serviceCount }
-        let f = branches.first!
-        let u = branches.dropFirst().reduce(f) { .union($0, $1) }
-        return .rewrite(u)
-    default:
-        return .rewriteChildren(algebra)
-    }
-}
-
-private func mergeServiceJoins(_ algebra: Algebra) throws -> RewriteStatus<Algebra> {
-    switch algebra {
-    case let .innerJoin(.service(a, lhs, ls), .service(b, rhs, rs)) where a == b:
-        return .rewrite(.service(a, .innerJoin(lhs, rhs), ls || rs))
-    default:
-        return .rewriteChildren(algebra)
-    }
-}
-
-private func pushdownJoins(_ algebra: Algebra) throws -> RewriteStatus<Algebra> {
-    switch algebra {
-    case let .innerJoin(.union(a, b), .union(c, d)):
-        return .rewriteChildren(
-            .union(
-                .union(
-                    .innerJoin(a, c),
-                    .innerJoin(a, d)
-                ),
-                .union(
-                    .innerJoin(b, c),
-                    .innerJoin(b, d)
-                )
-            )
-        )
-    case let .innerJoin(.union(a, b), c):
-        return .rewriteChildren(.union(.innerJoin(a, c), .innerJoin(b, c)))
-    case let .innerJoin(a, .union(b, c)):
-        return .rewriteChildren(.union(.innerJoin(a, b), .innerJoin(a, c)))
-    default:
-        return .rewriteChildren(algebra)
-    }
-}
-
-
 extension Algebra {
     var serviceCount: Int {
         var count = 0
@@ -250,21 +273,3 @@ extension Algebra {
     }
 }
 
-private func predicate(_ pred: Term, existsInEndpoint endpoint: URL) -> Bool {
-    print("Is predicate \(pred) available in \(endpoint)?")
-    let sparql = "ASK { [] \(pred) [] }"
-    let client = SPARQLClient(endpoint: endpoint)
-    do {
-        let result = try client.execute(sparql)
-        switch result {
-        case .boolean(let b):
-            print("-> \(b ? "yes" : "no")")
-            return b
-        default:
-            return true
-        }
-    } catch {
-        print("*** \(error)")
-        return true
-    }
-}
