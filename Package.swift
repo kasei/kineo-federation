@@ -6,9 +6,9 @@ import PackageDescription
 let package = Package(
     name: "kineo-federation",
     dependencies: [
-		.package(url: "https://github.com/kasei/swift-sparql-syntax.git", from: "0.0.39"),
+		.package(url: "https://github.com/kasei/swift-sparql-syntax.git", from: "0.0.41"),
 		.package(url: "https://github.com/kasei/swift-serd.git", from: "0.0.0"),
-		.package(url: "https://github.com/kasei/kineo.git", from: "0.0.14"),
+		.package(url: "https://github.com/kasei/kineo.git", from: "0.0.16"),
     ],
     targets: [
         .target(

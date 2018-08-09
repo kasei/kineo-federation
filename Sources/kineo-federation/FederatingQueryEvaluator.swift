@@ -10,38 +10,83 @@ import Foundation
 import SPARQLSyntax
 import Kineo
 
-public struct FederationQuery : Hashable, Equatable {
-    public var base: String?
-    public var form: QueryForm
-    public var algebra: FederationAlgebra
-    public var dataset: Dataset?
-    
-    public init(form: QueryForm, algebra: FederationAlgebra, dataset: Dataset? = nil, base: String? = nil) throws {
-        self.base = base
-        self.form = form
-        self.algebra = algebra
-        self.dataset = dataset
+protocol AvailabilityOracle {
+    func algebra(_ algebra: Algebra, availableAt endpoint: URL) -> Bool
+}
+
+class NullAvailabilityOracle : AvailabilityOracle {
+    func algebra(_ algebra: Algebra, availableAt endpoint: URL) -> Bool {
+        return true
     }
 }
 
-public indirect enum FederationAlgebra : Hashable {
-    case table([Node], [[Term?]])
-    case bgp([TriplePattern])
-    case innerJoin(FederationAlgebra, FederationAlgebra)
-    case leftOuterJoin(FederationAlgebra, FederationAlgebra, Expression)
-    case filter(FederationAlgebra, Expression)
-    case union(FederationAlgebra, FederationAlgebra)
-    case namedGraph(FederationAlgebra, Node)
-    case extend(FederationAlgebra, Expression, String)
-    case minus(FederationAlgebra, FederationAlgebra)
-    case project(FederationAlgebra, Set<String>)
-    case distinct(FederationAlgebra)
-    case service(URL, FederationAlgebra, Bool)
-    case slice(FederationAlgebra, Int?, Int?)
-    case order(FederationAlgebra, [Algebra.SortComparator])
-    case path(Node, PropertyPath, Node)
-    case aggregate(FederationAlgebra, [Expression], Set<Algebra.AggregationMapping>)
-    case subquery(FederationQuery)
+public class CachingAvailabilityOracle : AvailabilityOracle {
+    var existsCache: [URL:[Algebra:Bool]]
+    init() {
+        existsCache = [:]
+    }
+    
+    func algebra(_ algebra: Algebra, availableAt endpoint: URL) -> Bool {
+        if let e = existsCache[endpoint, default: [:]][algebra] {
+            return e
+        } else {
+            switch algebra {
+            case .triple(let tp):
+                if case .bound(let t) = tp.predicate {
+                    let e = predicate(t, existsInEndpoint: endpoint)
+                    existsCache[endpoint, default: [:]][algebra] = e
+                    return e
+                }
+            default:
+                break
+            }
+            print("Is \(algebra) possible available from \(endpoint)?")
+            existsCache[endpoint, default: [:]][algebra] = true
+            return true
+        }
+    }
+}
+
+open class FederatingQueryRewriter {
+    public func federatedEquavalent(for query: Query, endpoints: [URL]) throws -> Query {
+        let rewriter = SPARQLQueryRewriter()
+        let cachingOracle = CachingAvailabilityOracle()
+        let addServiceCalls = constructServiceCallInsertionRewriter(endpoints: endpoints, algebraOracle: cachingOracle)
+        var query = try rewriter.simplify(query: query)
+            .rewrite(addServiceCalls)
+        query = try query.rewrite(pushdownJoins)
+        query = try rewriter.simplify(query: query)
+        
+        query = try query
+            .rewrite(mergeServiceJoins)
+            .rewrite(reorderServiceJoins)
+        query = try rewriter.simplify(query: query)
+        return query
+    }
+
+    private func constructServiceCallInsertionRewriter(endpoints: [URL], algebraOracle oracle: AvailabilityOracle) -> (Algebra) throws -> RewriteStatus<Algebra> {
+        return { (a: Algebra) throws -> RewriteStatus<Algebra> in
+            switch a {
+            case .service(_):
+                return .keep
+            case .bgp(let tps):
+                let a : Algebra = tps.reduce(.joinIdentity) { .innerJoin($0, .triple($1)) }
+                return .rewriteChildren(a)
+            case .triple(_), .quad(_), .path(_):
+                let services = endpoints.compactMap { (u) -> Algebra? in
+                    if oracle.algebra(a, availableAt: u) {
+                        return .service(u, a, false)
+                    } else {
+                        return nil
+                    }
+                }
+                let u : Algebra = services.reduce(.unionIdentity) { .union($0, $1) }
+                return .rewrite(u)
+            default:
+                return .rewriteChildren(a)
+            }
+        }
+    }
 }
 
 // swiftlint:disable cyclomatic_complexity
@@ -95,41 +140,43 @@ open class FederatingQueryEvaluator: SimpleQueryEvaluatorProtocol {
     }
 
     public func evaluate(query original: Query) throws -> QueryResult<[TermResult], [Triple]> {
-        let rewriter = SPARQLQueryRewriter()
-        let addServiceCalls = constructServiceCallInsertionRewriter()
-        var query = try rewriter.simplify(query: original)
-            .rewrite(addServiceCalls)
+        let rewriter = FederatingQueryRewriter()
+        let query = try rewriter.federatedEquavalent(for: original, endpoints: endpoints)
         
-        query = try query.rewrite(pushdownJoins)
-        query = try rewriter.simplify(query: query)
-        
-        query = try query
-            .rewrite(mergeServiceJoins)
-            .rewrite(reorderServiceJoins)
-        
-        query = try rewriter.simplify(query: query)
-
 //        print("============================================================")
 //        print(query.serialize())
         return try evaluate(query: query, activeGraph: nil)
     }
 
-    private func constructServiceCallInsertionRewriter() -> (Algebra) throws -> RewriteStatus<Algebra> {
-        let e = self.endpoints
-        return { (a: Algebra) throws -> RewriteStatus<Algebra> in
-            switch a {
-            case .service(_):
-                return .keep
-            case .bgp(let tps):
-                let a : Algebra = tps.reduce(.joinIdentity) { .innerJoin($0, .triple($1)) }
-                return .rewriteChildren(a)
-            case .triple(_), .quad(_), .path(_):
-                let services = e.map { (u) -> Algebra in Algebra.service(u, a, false) }
-                let u : Algebra = services.reduce(.unionIdentity) { .union($0, $1) }
-                return .rewrite(u)
-            default:
-                return .rewriteChildren(a)
+    public func evaluate(algebra: Algebra, endpoint: URL, silent: Bool, activeGraph: Term) throws -> AnyIterator<TermResult> {
+        // TODO: improve this implementation (copied from SimpleQueryEvaluatorProtocol) to allow service calls to be fired in parallel and cached in cases where a pattern is repeated in the algebra tree
+        // customizable parameters:
+        // N - TOTAL number of requests that can be executed concurrently
+        // M - number of requests PER ENDPOINT that can be executed concurrently
+        //
+        // Allow a pre-execution algebra tree walk to identify the service calls, and queue requests for execution;
+        // then allow execution-time code to access the content that comes back.
+        // For a more involved implementation, allow query execution to be push driven (bottom-up)
+        // instead of pull driven (top-down), evaluating query operators as each new service call
+        // becomes available.
+        
+        let client = SPARQLClient(endpoint: endpoint, silent: silent)
+        do {
+            let s = SPARQLSerializer(prettyPrint: true)
+            guard let q = try? Query(form: .select(.star), algebra: algebra) else {
+                throw QueryError.evaluationError("Failed to serialize SERVICE algebra into SPARQL string")
             }
+            let tokens = try q.sparqlTokens()
+            let query = s.serialize(tokens)
+            let r = try client.execute(query)
+            switch r {
+            case let .bindings(_, seq):
+                return AnyIterator(seq.makeIterator())
+            default:
+                throw QueryError.evaluationError("SERVICE request did not return bindings")
+            }
+        } catch let e {
+            throw QueryError.evaluationError("SERVICE error: \(e)")
         }
     }
 }
@@ -200,5 +247,24 @@ extension Algebra {
         let lhs = l.unionBranches ?? [l]
         let rhs = r.unionBranches ?? [r]
         return lhs + rhs
+    }
+}
+
+private func predicate(_ pred: Term, existsInEndpoint endpoint: URL) -> Bool {
+    print("Is predicate \(pred) available in \(endpoint)?")
+    let sparql = "ASK { [] \(pred) [] }"
+    let client = SPARQLClient(endpoint: endpoint)
+    do {
+        let result = try client.execute(sparql)
+        switch result {
+        case .boolean(let b):
+            print("-> \(b ? "yes" : "no")")
+            return b
+        default:
+            return true
+        }
+    } catch {
+        print("*** \(error)")
+        return true
     }
 }
