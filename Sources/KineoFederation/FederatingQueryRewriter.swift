@@ -68,9 +68,10 @@ public class CachingAskAvailabilityOracle : AvailabilityOracle {
 open class FederatingQueryRewriter {
     var oracle: AvailabilityOracle
     
-    init(oracle: AvailabilityOracle? = nil) {
+    public init(oracle: AvailabilityOracle? = nil) {
         self.oracle = oracle ?? CachingAskAvailabilityOracle()
     }
+    
     public func federatedEquavalent(for query: Query, endpoints: [URL]) throws -> Query {
         let rewriter = SPARQLQueryRewriter()
         let cachingOracle = self.oracle
