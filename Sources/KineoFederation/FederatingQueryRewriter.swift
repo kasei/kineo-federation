@@ -81,9 +81,11 @@ open class FederatingQueryRewriter {
         query = try query.rewrite(FederatingQueryRewriter.pushdownJoins)
         query = try rewriter.simplify(query: query)
         
-        query = try query
-            .rewrite(FederatingQueryRewriter.mergeServiceJoins)
-            .rewrite(FederatingQueryRewriter.reorderServiceJoins)
+        for _ in 1..<5 {
+            // TODO: this is a hack because rewriting happend top-to-bottom, but join merging needs to happen bottom-to-top
+            query = try query.rewrite(FederatingQueryRewriter.mergeServiceJoins)
+        }
+        query = try query.rewrite(FederatingQueryRewriter.reorderServiceJoins)
         query = try rewriter.simplify(query: query)
         return query
     }
