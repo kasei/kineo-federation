@@ -37,7 +37,7 @@ func query(query: Query, graph: Term? = nil, verbose: Bool) throws -> Int {
             count += 1
             print("\(count)\t\(row.description)")
         case .boolean(let v):
-            print("\(v)")
+            print(v ? "yes": "no")
         case .triple(let triple):
             count += 1
             print("\(count)\t\(triple.description)")
