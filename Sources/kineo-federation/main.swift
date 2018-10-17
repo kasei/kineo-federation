@@ -22,7 +22,7 @@ import KineoFederation
 func query(query: Query, graph: Term? = nil, verbose: Bool) throws -> Int {
     var count       = 0
     let startTime = getCurrentTime()
-    let endpoints : [URL] = [URL(string: "http://dbpedia.org/sparql")!, URL(string: "http://example.org/sparql")!]
+    let endpoints : [URL] = [URL(string: "http://dbpedia.org/sparql")!, URL(string: "https://query.wikidata.org/sparql")!]
     let e           = FederatingQueryEvaluator(endpoints: endpoints, verbose: verbose)
     if let mtime = try e.effectiveVersion(matching: query) {
         let date = getDateString(seconds: mtime)
@@ -30,22 +30,20 @@ func query(query: Query, graph: Term? = nil, verbose: Bool) throws -> Int {
             print("# Last-Modified: \(date)")
         }
     }
-    let results = try e.evaluate(query: query)
-    switch results {
-    case .bindings(_, let iter):
-        for result in iter {
+    
+    try e.evaluate(query: query) { (result) in
+        switch result {
+        case .binding(_, let row):
             count += 1
-            print("\(count)\t\(result.description)")
-        }
-    case .boolean(let v):
-        print("\(v)")
-    case .triples(let iter):
-        for triple in iter {
+            print("\(count)\t\(row.description)")
+        case .boolean(let v):
+            print("\(v)")
+        case .triple(let triple):
             count += 1
             print("\(count)\t\(triple.description)")
         }
     }
-    
+
     if verbose {
         let endTime = getCurrentTime()
         let elapsed = endTime - startTime
@@ -98,6 +96,7 @@ do {
     guard var p = SPARQLParser(data: sparql) else { fatalError("Failed to construct SPARQL parser") }
     let q = try p.parseQuery()
     count = try query(query: q, graph: graph, verbose: verbose)
+    print("\(count) results")
 } catch let e {
     warn("*** Failed to evaluate query:")
     warn("*** - \(e)")

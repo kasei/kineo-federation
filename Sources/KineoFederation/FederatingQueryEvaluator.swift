@@ -27,7 +27,7 @@ open class FederatingQueryEvaluator: SimpleQueryEvaluatorProtocol {
         self.freshVarNumber = 0
         self.verbose = false
         self.ee = ExpressionEvaluator()
-        self.dataset = Dataset()
+        self.dataset = Dataset(defaultGraphs: [Term(iri: "http://example.org/")], namedGraphs: [])
     }
     
     public func freshVariable() -> Node {
@@ -64,11 +64,24 @@ open class FederatingQueryEvaluator: SimpleQueryEvaluatorProtocol {
         let rewriter = FederatingQueryRewriter()
         let query = try rewriter.federatedEquavalent(for: original, endpoints: endpoints)
         
-//        print("============================================================")
-//        print(query.serialize())
+        print("============================================================")
+        print(query.serialize())
+        print("============================================================")
+
         return try evaluate(query: query, activeGraph: nil)
     }
 
+    public func evaluate(query original: Query, resultHandler: (PushQueryResult) -> ()) throws {
+        let rewriter = FederatingQueryRewriter()
+        let query = try rewriter.federatedEquavalent(for: original, endpoints: endpoints)
+        
+        print("============================================================")
+        print(query.serialize())
+        print("============================================================")
+        
+        try evaluate(query: query, activeGraph: nil, resultHandler: resultHandler)
+    }
+    
     public func evaluate(algebra: Algebra, endpoint: URL, silent: Bool, activeGraph: Term) throws -> AnyIterator<TermResult> {
         // TODO: improve this implementation (copied from SimpleQueryEvaluatorProtocol) to allow service calls to be fired in parallel and cached in cases where a pattern is repeated in the algebra tree
         // customizable parameters:
@@ -81,7 +94,8 @@ open class FederatingQueryEvaluator: SimpleQueryEvaluatorProtocol {
         // instead of pull driven (top-down), evaluating query operators as each new service call
         // becomes available.
         
-        let client = SPARQLClient(endpoint: endpoint, silent: silent)
+        let timeout : DispatchTimeInterval = .never // .seconds(5)
+        let client = SPARQLClient(endpoint: endpoint, silent: silent, timeout: timeout)
         do {
             let s = SPARQLSerializer(prettyPrint: true)
             guard let q = try? Query(form: .select(.star), algebra: algebra) else {
