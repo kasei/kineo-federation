@@ -52,15 +52,15 @@ open class FederatingQueryEvaluator: SimpleQueryEvaluatorProtocol {
         fatalError("TODO: implement triples(describing:)")
     }
 
-    public func evaluate(quad: QuadPattern) throws -> AnyIterator<TermResult> {
+    public func evaluate(quad: QuadPattern) throws -> AnyIterator<SPARQLResultSolution<Term>> {
         fatalError("evaluate(quad:) should never be called after query rewriting")
     }
 
-    public func evaluate(algebra: Algebra, inGraph: Node) throws -> AnyIterator<TermResult> {
+    public func evaluate(algebra: Algebra, inGraph: Node) throws -> AnyIterator<SPARQLResultSolution<Term>> {
         fatalError("TODO: implement evaluate(algebra:inGraph:)")
     }
 
-    public func evaluate(query original: Query) throws -> QueryResult<[TermResult], [Triple]> {
+    public func evaluate(query original: Query) throws -> QueryResult<[SPARQLResultSolution<Term>], [Triple]> {
         let rewriter = FederatingQueryRewriter()
         let query = try rewriter.federatedEquavalent(for: original, endpoints: endpoints)
         
@@ -82,7 +82,7 @@ open class FederatingQueryEvaluator: SimpleQueryEvaluatorProtocol {
         try evaluate(query: query, activeGraph: nil, resultHandler: resultHandler)
     }
     
-    public func evaluate(algebra: Algebra, endpoint: URL, silent: Bool, activeGraph: Term) throws -> AnyIterator<TermResult> {
+    public func evaluate(algebra: Algebra, endpoint: URL, silent: Bool, activeGraph: Term) throws -> AnyIterator<SPARQLResultSolution<Term>> {
         // TODO: improve this implementation (copied from SimpleQueryEvaluatorProtocol) to allow service calls to be fired in parallel and cached in cases where a pattern is repeated in the algebra tree
         // customizable parameters:
         // N - TOTAL number of requests that can be executed concurrently
